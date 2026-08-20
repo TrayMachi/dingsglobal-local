@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+find_shared_local() {
+  local candidate
+  for candidate in \
+    "${DINGSGLOBAL_JAVAMIFI_LOCAL:-}" \
+    "$SCRIPT_DIR/../../javamifi/javamifi-local"; do
+    [[ -n "$candidate" && -f "$candidate/javamifi-db" ]] || continue
+    readlink -f -- "$candidate"
+    return 0
+  done
+  printf 'Could not locate javamifi-local. Set DINGSGLOBAL_JAVAMIFI_LOCAL.\n' >&2
+  exit 1
+}
+
+exec "$(find_shared_local)/javamifi-db" "$@"

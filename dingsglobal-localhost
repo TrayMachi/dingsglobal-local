@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly WORKSPACE_DIR="$(dirname -- "$SCRIPT_DIR")"
+readonly WEB_MAIN="$WORKSPACE_DIR/dingsglobal-web"
+readonly API_MAIN="$WORKSPACE_DIR/dingsglobal-api"
+readonly CMS_MAIN="$WORKSPACE_DIR/dingsglobal-cms"
+
+fail() {
+  printf 'DingsGlobal localhost command failed: %s\n' "$*" >&2
+  exit 1
+}
+
+shared_local() {
+  local candidate
+  for candidate in \
+    "${DINGSGLOBAL_JAVAMIFI_LOCAL:-}" \
+    "$SCRIPT_DIR/../../javamifi/javamifi-local"; do
+    [[ -n "$candidate" && -f "$candidate/javamifi-localhost" ]] || continue
+    readlink -f -- "$candidate"
+    return 0
+  done
+  fail 'Could not locate javamifi-local. Set DINGSGLOBAL_JAVAMIFI_LOCAL.'
+}
+
+branch_name() {
+  git -C "$1" branch --show-current 2>/dev/null || true
+}
+
+matching_worktree() {
+  local main="$1"
+  local branch="$2"
+  local path=''
+  local line
+
+  [[ -n "$branch" ]] || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      'worktree '*) path="${line#worktree }" ;;
+      "branch refs/heads/$branch")
+        printf '%s\n' "$path"
+        return 0
+        ;;
+    esac
+  done < <(git -C "$main" worktree list --porcelain)
+  return 1
+}
+
+canonical_dir() {
+  [[ -d "$1" ]] || fail "Directory does not exist: $1"
+  readlink -f -- "$1"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  dingsglobal-localhost up [--web PATH] [--api PATH] [--cms PATH] [--all] [--name NAME]
+  dingsglobal-localhost status [STACK_ID]
+  dingsglobal-localhost logs STACK_ID [SERVICE]
+  dingsglobal-localhost down STACK_ID
+  dingsglobal-localhost down -all
+  dingsglobal-localhost cleanup --path WORKTREE_PATH
+
+The runtime is backed by the shared JavaMifi local PostgreSQL service. UI
+traffic is exposed through a same-origin Cloudflare Quick Tunnel.
+EOF
+}
+
+command="${1:-up}"
+[[ $# -eq 0 ]] || shift
+shared="$(shared_local)"
+
+case "$command" in
+  up)
+    web=''
+    api=''
+    cms=''
+    name=''
+    all=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --web|--fe)
+          [[ $# -ge 2 ]] || fail "$1 requires a path"
+          web="$(canonical_dir "$2")"
+          shift 2
+          ;;
+        --api|--be)
+          [[ $# -ge 2 ]] || fail "$1 requires a path"
+          api="$(canonical_dir "$2")"
+          shift 2
+          ;;
+        --cms)
+          [[ $# -ge 2 ]] || fail '--cms requires a path'
+          cms="$(canonical_dir "$2")"
+          shift 2
+          ;;
+        --all)
+          all=true
+          shift
+          ;;
+        --name)
+          [[ $# -ge 2 ]] || fail '--name requires a value'
+          name="$2"
+          shift 2
+          ;;
+        -h|--help)
+          usage
+          exit 0
+          ;;
+        *)
+          fail "Unknown option: $1"
+          ;;
+      esac
+    done
+
+    if [[ "$all" == true ]]; then
+      web="$WEB_MAIN"
+      api="$API_MAIN"
+      cms="$CMS_MAIN"
+    elif [[ -z "$web" && -z "$api" && -z "$cms" ]]; then
+      current_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+      if [[ -n "$current_root" ]]; then
+        common_dir="$(git -C "$current_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+        current_repo="$(basename -- "$(dirname -- "$common_dir")")"
+        case "$current_repo" in
+          dingsglobal-web) web="$current_root" ;;
+          dingsglobal-api) api="$current_root" ;;
+          dingsglobal-cms) cms="$current_root" ;;
+        esac
+      fi
+      if [[ -z "$web" && -z "$api" && -z "$cms" ]]; then
+        web="$WEB_MAIN"
+        api="$API_MAIN"
+        cms="$CMS_MAIN"
+      fi
+    fi
+
+    if [[ -z "$api" ]]; then
+      selected="$web"
+      [[ -n "$selected" ]] || selected="$cms"
+      branch="$(branch_name "$selected")"
+      api="$(matching_worktree "$API_MAIN" "$branch" || true)"
+      api="${api:-$API_MAIN}"
+    fi
+    if [[ -n "$api" && -z "$web" && -z "$cms" ]]; then
+      branch="$(branch_name "$api")"
+      web="$(matching_worktree "$WEB_MAIN" "$branch" || true)"
+      web="${web:-$WEB_MAIN}"
+    fi
+
+    args=(up --be "$api")
+    [[ -n "$web" ]] && args+=(--fe "$web")
+    [[ -n "$cms" ]] && args+=(--cms "$cms")
+    [[ -n "$name" ]] && args+=(--name "$name")
+    JAVAMIFI_RUNTIME_ROOT="$SCRIPT_DIR/.runtime" exec "$shared/javamifi-localhost" "${args[@]}"
+    ;;
+  status|logs|down|cleanup|-h|--help|help)
+    JAVAMIFI_RUNTIME_ROOT="$SCRIPT_DIR/.runtime" exec "$shared/javamifi-localhost" "$command" "$@"
+    ;;
+  *)
+    usage >&2
+    fail "Unknown command: $command"
+    ;;
+esac

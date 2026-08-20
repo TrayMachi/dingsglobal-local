@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly BIN_DIR="${HOME}/.local/bin"
+
+mkdir -p "$BIN_DIR"
+ln -sfn "$SCRIPT_DIR/dingsglobal-db" "$BIN_DIR/dingsglobal-db"
+ln -sfn "$SCRIPT_DIR/dingsglobal-localhost" "$BIN_DIR/dingsglobal-localhost"
+
+printf 'Installed dingsglobal-db and dingsglobal-localhost in %s\n' "$BIN_DIR"
+if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
+  printf 'Add this directory to PATH: export PATH="%s:$PATH"\n' "$BIN_DIR"
+fi
