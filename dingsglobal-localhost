@@ -6,7 +6,7 @@ readonly WORKSPACE_DIR="$(dirname -- "$SCRIPT_DIR")"
 readonly COMPOSE_FILE="$SCRIPT_DIR/apps.compose.yaml"
 readonly RUNTIME_ROOT="$SCRIPT_DIR/.runtime"
 readonly WEB_MAIN="$WORKSPACE_DIR/dingsglobal-web"
-readonly API_MAIN="$WORKSPACE_DIR/dingsglobal-api"
+readonly API_STAGING="$WORKSPACE_DIR/dingsglobal-api"
 readonly CMS_MAIN="$WORKSPACE_DIR/dingsglobal-cms"
 readonly TEST_TURNSTILE_SITE_KEY="1x00000000000000000000AA"
 readonly TEST_TURNSTILE_SECRET_KEY="1x0000000000000000000000000000000AA"
@@ -102,6 +102,38 @@ copy_baseline_env() {
 
   cp "$source" "$destination"
   chmod 600 "$destination"
+}
+
+prepare_api_credentials() {
+  local env_file="$1"
+  local selected="$2"
+  local main="$3"
+  local credentials_path source destination
+
+  credentials_path="$(env_value "$env_file" GA_CREDENTIALS_PATH)"
+  [[ -n "$credentials_path" ]] || return 0
+
+  if [[ "$credentials_path" = /* ]]; then
+    [[ -f "$credentials_path" ]] && return 0
+    set_env_value "$env_file" GA_CREDENTIALS_PATH ""
+    set_env_value "$env_file" GA_PROPERTY_ID ""
+    return 0
+  fi
+
+  destination="$selected/$credentials_path"
+  [[ -f "$destination" ]] && return 0
+
+  source="$main/$credentials_path"
+  if [[ -f "$source" ]]; then
+    cp "$source" "$destination"
+    chmod 600 "$destination"
+    return 0
+  fi
+
+  # Traffic analytics is optional for local review; missing credentials must
+  # not crash the API process.
+  set_env_value "$env_file" GA_CREDENTIALS_PATH ""
+  set_env_value "$env_file" GA_PROPERTY_ID ""
 }
 
 ensure_dependencies() {
@@ -348,7 +380,7 @@ up_stack() {
       --web|--fe) [[ $# -ge 2 ]] || fail "$1 requires a path"; FE_PATH="$(canonical_dir "$2")"; include_fe=true; explicit_selection=true; shift 2 ;;
       --api|--be) [[ $# -ge 2 ]] || fail "$1 requires a path"; BE_PATH="$(canonical_dir "$2")"; explicit_selection=true; shift 2 ;;
       --cms) [[ $# -ge 2 ]] || fail '--cms requires a path'; CMS_PATH="$(canonical_dir "$2")"; include_cms=true; explicit_selection=true; shift 2 ;;
-      --all) FE_PATH="$WEB_MAIN"; BE_PATH="$API_MAIN"; CMS_PATH="$CMS_MAIN"; include_fe=true; include_cms=true; explicit_selection=true; shift ;;
+      --all) FE_PATH="$WEB_MAIN"; BE_PATH="$API_STAGING"; CMS_PATH="$CMS_MAIN"; include_fe=true; include_cms=true; explicit_selection=true; shift ;;
       --name) [[ $# -ge 2 ]] || fail '--name requires a value'; custom_name="$2"; shift 2 ;;
       -h|--help) usage; return 0 ;;
       *) fail "Unknown option: $1" ;;
@@ -368,12 +400,12 @@ up_stack() {
     fi
   fi
   if [[ -z "$FE_PATH" && -z "$CMS_PATH" && -z "$BE_PATH" ]]; then
-    FE_PATH="$WEB_MAIN"; BE_PATH="$API_MAIN"; CMS_PATH="$CMS_MAIN"; include_fe=true; include_cms=true
+    FE_PATH="$WEB_MAIN"; BE_PATH="$API_STAGING"; CMS_PATH="$CMS_MAIN"; include_fe=true; include_cms=true
   fi
   if [[ -z "$BE_PATH" ]]; then
     selected_branch="$(branch_name "${FE_PATH:-$CMS_PATH}")"
-    match="$(matching_worktree "$API_MAIN" "$selected_branch" || true)"
-    BE_PATH="${match:-$API_MAIN}"
+    match="$(matching_worktree "$API_STAGING" "$selected_branch" || true)"
+    BE_PATH="${match:-$API_STAGING}"
   fi
   if [[ "$include_fe" == false && "$include_cms" == false ]]; then
     selected_branch="$(branch_name "$BE_PATH")"
@@ -410,20 +442,33 @@ up_stack() {
     BE_PORT="$(pick_port 31000 31999)"; FE_PORT="$(pick_port 32000 32999)"; CMS_PORT="$(pick_port 33000 33999)"; FE_GATEWAY_PORT="$(pick_port 34000 34999)"; CMS_GATEWAY_PORT="$(pick_port 35000 35999)"
   fi
 
-  copy_baseline_env "$BE_PATH" "$API_MAIN" "$state_dir/backend.env"
+  copy_baseline_env "$BE_PATH" "$API_STAGING" "$state_dir/backend.env"
   copy_baseline_env "$FE_PATH" "$WEB_MAIN" "$state_dir/frontend.env"
   copy_baseline_env "$CMS_PATH" "$CMS_MAIN" "$state_dir/cms.env"
+  prepare_api_credentials "$state_dir/backend.env" "$BE_PATH" "$API_STAGING"
   database_url="$(cd "$BE_PATH" && "$SCRIPT_DIR/dingsglobal-db" url)"
   database_url="${database_url/@127.0.0.1:5432/@postgres:5432}"; database_url="${database_url/@localhost:5432/@postgres:5432}"
   set_env_value "$state_dir/backend.env" DATABASE_URL "$database_url"; set_env_value "$state_dir/backend.env" PORT 3001; set_env_value "$state_dir/backend.env" NODE_ENV development; set_env_value "$state_dir/backend.env" CLOUDFLARE_TURNSTILE_SECRET_KEY "$TEST_TURNSTILE_SECRET_KEY"
   write_compose_env "$state_dir"
 
-  if [[ "$include_fe" == true ]]; then profiles+=(--profile fe); app_services+=(frontend); compose_for "$state_dir" --profile fe up -d gateway-fe; compose_for "$state_dir" --profile fe up -d --force-recreate tunnel-fe; frontend_url="$(wait_for_tunnel "$state_dir" tunnel-fe)"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_API_URL "$frontend_url/api/v1"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_SITE_URL "$frontend_url"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY "$TEST_TURNSTILE_SITE_KEY"; fi
-  if [[ "$include_cms" == true ]]; then profiles+=(--profile cms); app_services+=(cms); compose_for "$state_dir" --profile cms up -d gateway-cms; compose_for "$state_dir" --profile cms up -d --force-recreate tunnel-cms; cms_url="$(wait_for_tunnel "$state_dir" tunnel-cms)"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_API_BASE_URL "$cms_url/api/v1"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_ENV development; fi
+  if [[ "$include_fe" == true ]]; then profiles+=(--profile fe); app_services+=(frontend); compose_for "$state_dir" --profile fe up -d --force-recreate gateway-fe; compose_for "$state_dir" --profile fe up -d --force-recreate tunnel-fe; frontend_url="$(wait_for_tunnel "$state_dir" tunnel-fe)"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_API_URL "/api/v1"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_SITE_URL "$frontend_url"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY "$TEST_TURNSTILE_SITE_KEY"; fi
+  if [[ "$include_cms" == true ]]; then profiles+=(--profile cms); app_services+=(cms); compose_for "$state_dir" --profile cms up -d --force-recreate gateway-cms; compose_for "$state_dir" --profile cms up -d --force-recreate tunnel-cms; cms_url="$(wait_for_tunnel "$state_dir" tunnel-cms)"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_API_BASE_URL "/api/v1"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_ENV development; fi
 
   original_origins="$(env_value "$state_dir/backend.env" ALLOWED_ORIGINS)"; original_origins="${original_origins%\"}"; original_origins="${original_origins#\"}"; allowed_origins="$original_origins"
-  [[ -n "$frontend_url" ]] && allowed_origins="${allowed_origins:+$allowed_origins,}$frontend_url"
-  [[ -n "$cms_url" ]] && allowed_origins="${allowed_origins:+$allowed_origins,}$cms_url"
+  for origin in "$frontend_url" "$cms_url"; do
+    [[ -n "$origin" ]] || continue
+    [[ ",$allowed_origins," == *",$origin,"* ]] || allowed_origins="${allowed_origins:+$allowed_origins,}$origin"
+  done
+  if [[ "$include_fe" == true ]]; then
+    for origin in "http://localhost:$FE_GATEWAY_PORT" "http://127.0.0.1:$FE_GATEWAY_PORT"; do
+      [[ ",$allowed_origins," == *",$origin,"* ]] || allowed_origins="${allowed_origins:+$allowed_origins,}$origin"
+    done
+  fi
+  if [[ "$include_cms" == true ]]; then
+    for origin in "http://localhost:$CMS_GATEWAY_PORT" "http://127.0.0.1:$CMS_GATEWAY_PORT"; do
+      [[ ",$allowed_origins," == *",$origin,"* ]] || allowed_origins="${allowed_origins:+$allowed_origins,}$origin"
+    done
+  fi
   set_env_value "$state_dir/backend.env" ALLOWED_ORIGINS "$allowed_origins"; [[ -n "$frontend_url" ]] && set_env_value "$state_dir/backend.env" FRONTEND_URL "$frontend_url"
   compose_for "$state_dir" "${profiles[@]}" up -d --force-recreate --wait "${app_services[@]}"
   [[ -n "$frontend_url" ]] && wait_for_url "$frontend_url/api/v1/health" "$frontend_url" && wait_for_url "$frontend_url"

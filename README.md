@@ -14,6 +14,11 @@ dingsglobal/
 `-- dingsglobal-cms/
 ```
 
+The canonical `dingsglobal-web` and `dingsglobal-api` checkouts are maintained
+on the `staging` branch. Use them as application baselines for local worktrees,
+create web and API worktrees from `origin/staging`, and target `staging` for
+their pull requests unless a task explicitly says otherwise.
+
 The runtime also expects the JavaMifi workspace at the sibling path used by the
 wrapper, or at `DINGSGLOBAL_JAVAMIFI_LOCAL` when the workspaces are elsewhere.
 
