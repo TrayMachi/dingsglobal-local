@@ -87,13 +87,6 @@ services:
     ports:
       - "127.0.0.1:${FE_GATEWAY_PORT}:8080"
 
-  tunnel-fe:
-    image: cloudflare/cloudflared:latest
-    profiles: [fe]
-    command: tunnel --no-autoupdate --protocol http2 --loglevel info --url http://gateway-fe:8080
-    depends_on:
-      - gateway-fe
-
   gateway-cms:
     image: nginx:1.27-alpine
     profiles: [cms]
@@ -102,14 +95,7 @@ services:
     ports:
       - "127.0.0.1:${CMS_GATEWAY_PORT}:8080"
 
-  tunnel-cms:
-    image: cloudflare/cloudflared:latest
-    profiles: [cms]
-    command: tunnel --no-autoupdate --protocol http2 --loglevel info --url http://gateway-cms:8080
-    depends_on:
-      - gateway-cms
-
 networks:
   database:
     external: true
-    name: javamifi-local_default
+    name: dingsglobal-local_default

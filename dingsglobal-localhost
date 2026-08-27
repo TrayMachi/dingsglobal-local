@@ -30,8 +30,8 @@ Usage:
   dingsglobal-localhost down -all
   dingsglobal-localhost cleanup --path WORKTREE_PATH
 
-The application stack is owned by this repository. PostgreSQL remains shared
-through dingsglobal-db and the JavaMifi local database service.
+  The application stack is owned by this repository. PostgreSQL is also owned
+  by this repository and managed through dingsglobal-db.
 EOF
 }
 
@@ -77,9 +77,9 @@ copy_baseline_env() {
   for candidate in \
     "$selected/.env" \
     "$selected/.env.local" \
-    "$selected/.env.example" \
     "$main/.env" \
     "$main/.env.local" \
+    "$selected/.env.example" \
     "$main/.env.example"; do
     if [[ -f "$candidate" ]]; then
       source="$candidate"
@@ -199,26 +199,6 @@ compose_for() {
     --file "$COMPOSE_FILE" \
     --env-file "$state_dir/compose.env" \
     "$@"
-}
-
-wait_for_tunnel() {
-  local state_dir="$1"
-  local service="$2"
-  local logs=""
-  local url=""
-
-  for _ in $(seq 1 60); do
-    logs="$(compose_for "$state_dir" logs --no-color "$service" 2>&1 || true)"
-    url="$(printf '%s\n' "$logs" | grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -n 1 || true)"
-    if [[ -n "$url" && "$logs" == *'Registered tunnel connection'* ]]; then
-      printf '%s\n' "$url"
-      return 0
-    fi
-    sleep 1
-  done
-
-  compose_for "$state_dir" logs --no-color "$service" >&2 || true
-  fail "Timed out waiting for $service to create a Quick Tunnel."
 }
 
 wait_for_url() {
@@ -371,7 +351,7 @@ up_stack() {
   local custom_name="" explicit_selection=false include_fe=false include_cms=false
   local current_root="" current_repo="" common_dir="" selected_branch="" match=""
   local stack_seed stack_hash stack_label state_dir database_url original_origins allowed_origins
-  local frontend_url="" cms_url="" profiles=() app_services=(backend)
+  local frontend_url="" cms_url="" firebase_key firebase_value profiles=() app_services=(backend)
   local BE_COMMAND FE_COMMAND CMS_COMMAND
 
   BE_PATH=""; FE_PATH=""; CMS_PATH=""
@@ -446,13 +426,19 @@ up_stack() {
   copy_baseline_env "$FE_PATH" "$WEB_MAIN" "$state_dir/frontend.env"
   copy_baseline_env "$CMS_PATH" "$CMS_MAIN" "$state_dir/cms.env"
   prepare_api_credentials "$state_dir/backend.env" "$BE_PATH" "$API_STAGING"
+  for firebase_key in FIREBASE_PROJECT_ID FIREBASE_CLIENT_EMAIL FIREBASE_PRIVATE_KEY; do
+    firebase_value="$(env_value "$state_dir/backend.env" "$firebase_key")"
+    if [[ "$firebase_value" == \"*\" && "$firebase_value" == *\" ]]; then
+      set_env_value "$state_dir/backend.env" "$firebase_key" "${firebase_value:1:${#firebase_value}-2}"
+    fi
+  done
   database_url="$(cd "$BE_PATH" && "$SCRIPT_DIR/dingsglobal-db" url)"
-  database_url="${database_url/@127.0.0.1:5432/@postgres:5432}"; database_url="${database_url/@localhost:5432/@postgres:5432}"
+  database_url="${database_url/@127.0.0.1:5433/@postgres:5432}"; database_url="${database_url/@localhost:5433/@postgres:5432}"
   set_env_value "$state_dir/backend.env" DATABASE_URL "$database_url"; set_env_value "$state_dir/backend.env" PORT 3001; set_env_value "$state_dir/backend.env" NODE_ENV development; set_env_value "$state_dir/backend.env" CLOUDFLARE_TURNSTILE_SECRET_KEY "$TEST_TURNSTILE_SECRET_KEY"
   write_compose_env "$state_dir"
 
-  if [[ "$include_fe" == true ]]; then profiles+=(--profile fe); app_services+=(frontend); compose_for "$state_dir" --profile fe up -d --force-recreate gateway-fe; compose_for "$state_dir" --profile fe up -d --force-recreate tunnel-fe; frontend_url="$(wait_for_tunnel "$state_dir" tunnel-fe)"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_API_URL "/api/v1"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_SITE_URL "$frontend_url"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY "$TEST_TURNSTILE_SITE_KEY"; fi
-  if [[ "$include_cms" == true ]]; then profiles+=(--profile cms); app_services+=(cms); compose_for "$state_dir" --profile cms up -d --force-recreate gateway-cms; compose_for "$state_dir" --profile cms up -d --force-recreate tunnel-cms; cms_url="$(wait_for_tunnel "$state_dir" tunnel-cms)"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_API_BASE_URL "/api/v1"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_ENV development; fi
+  if [[ "$include_fe" == true ]]; then profiles+=(--profile fe); app_services+=(frontend); compose_for "$state_dir" --profile fe up -d --force-recreate gateway-fe; frontend_url="http://localhost:$FE_GATEWAY_PORT"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_API_URL "/api/v1"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_SITE_URL "$frontend_url"; set_env_value "$state_dir/frontend.env" NEXT_PUBLIC_CLOUDFLARE_TURNSTILE_SITE_KEY "$TEST_TURNSTILE_SITE_KEY"; fi
+  if [[ "$include_cms" == true ]]; then profiles+=(--profile cms); app_services+=(cms); compose_for "$state_dir" --profile cms up -d --force-recreate gateway-cms; cms_url="http://localhost:$CMS_GATEWAY_PORT"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_API_BASE_URL "/api/v1"; set_env_value "$state_dir/cms.env" NEXT_PUBLIC_ENV development; fi
 
   original_origins="$(env_value "$state_dir/backend.env" ALLOWED_ORIGINS)"; original_origins="${original_origins%\"}"; original_origins="${original_origins#\"}"; allowed_origins="$original_origins"
   for origin in "$frontend_url" "$cms_url"; do
@@ -470,7 +456,7 @@ up_stack() {
     done
   fi
   set_env_value "$state_dir/backend.env" ALLOWED_ORIGINS "$allowed_origins"; [[ -n "$frontend_url" ]] && set_env_value "$state_dir/backend.env" FRONTEND_URL "$frontend_url"
-  compose_for "$state_dir" "${profiles[@]}" up -d --force-recreate --wait "${app_services[@]}"
+  compose_for "$state_dir" "${profiles[@]}" up -d --force-recreate --remove-orphans --wait "${app_services[@]}"
   [[ -n "$frontend_url" ]] && wait_for_url "$frontend_url/api/v1/health" "$frontend_url" && wait_for_url "$frontend_url"
   [[ -n "$cms_url" ]] && wait_for_url "$cms_url/api/v1/health" "$cms_url" && wait_for_url "$cms_url"
 
@@ -484,7 +470,7 @@ CMS_PATH=$([[ "$include_cms" == true ]] && printf '%s' "$CMS_PATH")
 CMS_URL=$cms_url
 EOF
   chmod 600 "$state_dir/summary.env"
-  printf '\nDingsGlobal localhost stack is ready.\n'; show_stack "$state_dir"; printf 'Quick Tunnel URLs are public, temporary, and intended only for development.\n'
+  printf '\nDingsGlobal localhost stack is ready.\n'; show_stack "$state_dir"; printf 'Use the printed localhost URLs for local development.\n'
 }
 
 command="${1:-up}"

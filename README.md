@@ -1,8 +1,8 @@
 # DingsGlobal Local Development
 
-This repository is the DingsGlobal local runtime coordinator. It reuses the
-JavaMifi local PostgreSQL Compose project and its immutable
-`javamifi_worktree_baseline`; it does not copy or own the database volume.
+This repository is the DingsGlobal local runtime coordinator. It owns a separate
+PostgreSQL Compose project, volume, network, and immutable
+`dingsglobal_worktree_baseline`.
 
 Keep these repositories as siblings under the workspace:
 
@@ -19,8 +19,8 @@ on the `staging` branch. Use them as application baselines for local worktrees,
 create web and API worktrees from `origin/staging`, and target `staging` for
 their pull requests unless a task explicitly says otherwise.
 
-The runtime also expects the JavaMifi workspace at the sibling path used by the
-wrapper, or at `DINGSGLOBAL_JAVAMIFI_LOCAL` when the workspaces are elsewhere.
+Database snapshots may be kept in the sibling JavaMifi workspace, but the
+DingsGlobal database service does not connect to or reuse the JavaMifi service.
 
 ## Install
 
@@ -34,15 +34,15 @@ The scripts can also be run directly from this repository.
 ## Baseline
 
 The approved snapshot is intentionally not committed. Restore it once into the
-shared JavaMifi PostgreSQL service:
+DingsGlobal PostgreSQL service:
 
 ```bash
 dingsglobal-db baseline restore \
   ../../javamifi/javamifi-local/new_nocobase_v2-20082026101314.gz \
-  javamifi_staging_20260820
+  dingsglobal_staging_20260820
 ```
 
-The command installs `javamifi_worktree_baseline`. Existing application
+The command installs `dingsglobal_worktree_baseline`. Existing application
 worktrees never connect to that baseline directly; `dingsglobal-db setup`
 clones a disposable database for the current API worktree.
 
@@ -63,9 +63,9 @@ dingsglobal-localhost up --cms ../dingsglobal-cms --api ../dingsglobal-api --nam
 
 The CLI automatically selects a matching sibling worktree when an explicit
 application path is omitted. It starts the shared API, optional web/CMS
-containers, same-origin Nginx gateways, and temporary Cloudflare Quick Tunnels.
-The printed web/CMS URL is the review URL; `/api/*` is routed to the selected
-API. URLs are public, temporary, and development-only.
+containers, and same-origin Nginx gateways bound to local ports. The printed
+web/CMS URL is the local review URL; `/api/*` is routed to the selected API.
+Use the printed `http://localhost:<port>` URLs for development.
 
 ## Everyday commands
 
@@ -73,7 +73,7 @@ API. URLs are public, temporary, and development-only.
 ```
 
 `down` preserves runtime metadata and databases. `cleanup --path` stops and
-removes only stacks using the given worktree. It does not stop the shared
+removes only stacks using the given worktree. It does not stop the DingsGlobal
 PostgreSQL container or remove its volume.
 
 For an API worktree:
@@ -84,8 +84,8 @@ dingsglobal-db setup
 ```
 
 Use `dingsglobal-db drop` only after the PR is merged and the local runtime has
-been cleaned. Never run `docker compose down` against the shared JavaMifi local
-database project.
+been cleaned. Do not run `docker compose down` against the DingsGlobal database
+project while another worktree may be active.
 
 ## Development flow
 
