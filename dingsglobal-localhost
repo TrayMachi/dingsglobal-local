@@ -183,6 +183,32 @@ set_env_value() {
   chmod 600 "$file"
 }
 
+ensure_fraud_signal_secret() {
+  local env_file="$1"
+  local state_dir="$2"
+  local secret_file="$state_dir/fraud-signal-secret"
+  local secret
+
+  secret="$(env_value "$env_file" FRAUD_SIGNAL_SECRET)"
+  secret="${secret#\"}"
+  secret="${secret%\"}"
+  if [[ -n "$secret" && "$secret" != "your_very_long_random_fraud_signal_secret" ]]; then
+    return 0
+  fi
+
+  if [[ -s "$secret_file" ]]; then
+    IFS= read -r secret <"$secret_file"
+  else
+    secret="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+    [[ -n "$secret" ]] || fail "Could not generate a local FRAUD_SIGNAL_SECRET."
+    printf '%s\n' "$secret" >"$secret_file"
+    chmod 600 "$secret_file"
+  fi
+
+  # Keep this stable across local restarts so stored fraud hashes remain comparable.
+  set_env_value "$env_file" FRAUD_SIGNAL_SECRET "$secret"
+}
+
 app_command() {
   case "$1" in
     api) printf '%s\n' './node_modules/.bin/nodemon ./index.js' ;;
@@ -425,6 +451,7 @@ up_stack() {
   copy_baseline_env "$BE_PATH" "$API_STAGING" "$state_dir/backend.env"
   copy_baseline_env "$FE_PATH" "$WEB_MAIN" "$state_dir/frontend.env"
   copy_baseline_env "$CMS_PATH" "$CMS_MAIN" "$state_dir/cms.env"
+  ensure_fraud_signal_secret "$state_dir/backend.env" "$state_dir"
   prepare_api_credentials "$state_dir/backend.env" "$BE_PATH" "$API_STAGING"
   for firebase_key in FIREBASE_PROJECT_ID FIREBASE_CLIENT_EMAIL FIREBASE_PRIVATE_KEY; do
     firebase_value="$(env_value "$state_dir/backend.env" "$firebase_key")"
