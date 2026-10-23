@@ -1,6 +1,6 @@
 services:
   backend:
-    image: node:24.22.1-bookworm
+    image: node:22.21.0-bookworm
     user: "${HOST_UID}:${HOST_GID}"
     working_dir: ${BE_PATH}
     command: ${BE_COMMAND}
@@ -28,7 +28,7 @@ services:
       start_period: 10s
 
   frontend:
-    image: node:24.22.1-bookworm-slim
+    image: node:22.21.0-bookworm-slim
     profiles: [fe]
     user: "${HOST_UID}:${HOST_GID}"
     working_dir: ${FE_PATH}
@@ -54,7 +54,7 @@ services:
       start_period: 15s
 
   cms:
-    image: node:24.22.1-bookworm-slim
+    image: node:22.21.0-bookworm-slim
     profiles: [cms]
     user: "${HOST_UID}:${HOST_GID}"
     working_dir: ${CMS_PATH}
